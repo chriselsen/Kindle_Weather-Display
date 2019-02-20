@@ -67,7 +67,7 @@ def lambda_handler(event, context):
             'partly-cloudy-night': "sct",
             'hail': "frza",
             'thunderstorm': "tsra",
-            'tornado': "wind"
+            'tornado': "tornado"
         }.get(argument, "hot")
 
     # Parse temperatures & icons & temperatures
