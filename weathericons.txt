@@ -1,0 +1,24 @@
+bkn: Mostly Cloudy
+blizzard: Blizzard
+cold: Cold
+du: Dust
+few: A few clouds
+fg: Fog
+fu: Smoke
+fzra: Freezing Rain
+hi_shwrs: Scattered Showers
+hot: Hot
+ip: Sleet
+mix: Snow / Freezing Rain
+ovc: Overcast
+ra: Rain
+raip: Rain / Sleet
+rasn: Snow / Rain
+sct: Partly Cloudy
+sctfg: Scattered fog
+scttsra: Scattered Thunderstorms
+shra: Showers
+skc: Fair
+sn: Snow
+tsra: Thunderstorms
+wind: Wind

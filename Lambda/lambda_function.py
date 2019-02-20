@@ -5,7 +5,9 @@ print('Loading function')
 
 def lambda_handler(event, context):
     from xml.dom import minidom
+    import json
     import datetime
+    import time
     import pytz
     import codecs
     import boto3
@@ -13,6 +15,11 @@ def lambda_handler(event, context):
     import subprocess
     from shutil import copyfile
     from urllib.request import urlopen
+
+    #
+    # DarkSky API Key
+    #
+    DarkSkyAPIKey = "< Fill me out >"
 
     #
     # Geographic location
@@ -26,34 +33,51 @@ def lambda_handler(event, context):
 	#
 
     # Fetch data (change lat and lon to desired location)
-    weather_xml = urlopen('http://graphical.weather.gov/xml/SOAP_server/ndfdSOAPclientByDay.php?whichClient=NDFDgenByDay&lat=' + str(latitude) + '&lon=' + str(longitude) + '&format=24+hourly&numDays=4&Unit=m').read()
-    dom = minidom.parseString(weather_xml)
-
-    # Parse temperatures
-    xml_temperatures = dom.getElementsByTagName('temperature')
-    highs = [None]*4
-    lows = [None]*4
-    for item in xml_temperatures:
-        if item.getAttribute('type') == 'maximum':
-            values = item.getElementsByTagName('value')
-            for i in range(len(values)):
-                highs[i] = int(values[i].firstChild.nodeValue)
-        if item.getAttribute('type') == 'minimum':
-            values = item.getElementsByTagName('value')
-            for i in range(len(values)):
-                lows[i] = int(values[i].firstChild.nodeValue)
-
-    # Parse icons
-    xml_icons = dom.getElementsByTagName('icon-link')
-    icons = [None]*4
-    for i in range(len(xml_icons)):
-        icons[i] = xml_icons[i].firstChild.nodeValue.split('/')[-1].split('.')[0].rstrip('0123456789')
+    weather_darksky = urlopen('https://api.darksky.net/forecast/' + DarkSkyAPIKey + '/' + str(latitude) + ',' + str(longitude) + '?exclude=currently,minutely,hourly,alerts,flags&units=si')
+    weather_json = json.loads(weather_darksky.read())
 
     # Parse dates
-    xml_day_one = dom.getElementsByTagName('start-valid-time')[0].firstChild.nodeValue[0:10]
-    day_one = datetime.datetime.strptime(xml_day_one, '%Y-%m-%d')
-    today = datetime.datetime.now(pytz.timezone('US/Pacific'))
+    #day_one = datetime.datetime.strptime(xml_day_one, '%Y-%m-%d')
+    #today = datetime.datetime.now(pytz.timezone('US/Pacific'))
+    today = datetime.datetime.now(pytz.timezone(weather_json["timezone"]))
+    print('Current time: ' + str(today))
+
+    # Determine if report for today or tomorrow
+    cutoffTime = datetime.datetime.strptime('17:59','%H:%M')
+    if (today.time() > cutoffTime.time()):
+        lookupDay = 1
+    else:
+        lookupDay = 0
+    day_one = today + datetime.timedelta(days=lookupDay)
+
     days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+    # convert icons
+    def icon_conv(argument):
+        return {
+            'clear-day': "skc",
+            'clear-night': "skc",
+            'rain': "ra",
+            'snow': "sn",
+            'sleet': "ip",
+            'wind': "wind",
+            'fog': "fg",
+            'cloudy': "bkn",
+            'partly-cloudy-day': "sct",
+            'partly-cloudy-night': "sct",
+            'hail': "frza",
+            'thunderstorm': "tsra",
+            'tornado': "wind"
+        }.get(argument, "hot")
+
+    # Parse temperatures & icons & temperatures
+    highs = [None]*4
+    lows = [None]*4
+    icons = [None]*4
+    for i in range(0, 4):
+        highs[i] = int(round(weather_json["daily"]["data"][(i+lookupDay)]["temperatureHigh"], 0))
+        lows[i] = int(round(weather_json["daily"]["data"][(i+lookupDay)]["temperatureLow"], 0))
+        icons[i] = icon_conv(weather_json["daily"]["data"][(i+lookupDay)]["icon"])
 
 	#
 	# Preprocess SVG
@@ -62,7 +86,7 @@ def lambda_handler(event, context):
     # Open SVG to process
     output = codecs.open('weather-script-preprocess.svg', 'r', encoding='utf-8').read()
 
-    output = output.replace('UPDATE', "Updated: " + today.strftime("%H:%M"))
+    output = output.replace('UPDATE', "DarkSky: " + today.strftime("%H:%M"))
     output = output.replace('DATE', days_of_week[(day_one).weekday()] + ", " + day_one.strftime("%d.%m.%Y"))
 
     # Insert icons and temperatures
@@ -87,4 +111,4 @@ def lambda_handler(event, context):
 
     # Upload file to S3
     s3 = boto3.resource('s3')
-    s3.meta.client.upload_file('/tmp/weather-script-output.png', 'cdn.kangaroonet.de', 'sf-weather.png')
+    s3.meta.client.upload_file('/tmp/weather-script-output.png', 'cdn.kangaroonet.de', 'sf-weather.png', ExtraArgs={'ContentType': "image/png", 'ACL': "public-read"})
