@@ -106,9 +106,21 @@ def lambda_handler(event, context):
     # Convert SVG to PNG
     copyfile('rsvg-convert', '/tmp/rsvg-convert')
     os.chmod('/tmp/rsvg-convert', 0o775)
-    cmd = '/tmp/rsvg-convert --background-color=white -o /tmp/weather-script-output.png /tmp/weather-script-output.svg'
-    subprocess.check_output(cmd, shell=True)
+    cmd1 = '/tmp/rsvg-convert --background-color=white -o /tmp/weather-script-output.png /tmp/weather-script-output.svg'
+    try:
+        subprocess.check_output(cmd1,shell=True,stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
 
+    # PNGCrush the result for better results on Kindle
+    copyfile('pngcrush', '/tmp/pngcrush')
+    os.chmod('/tmp/pngcrush', 0o775)
+    cmd2 = 'cd /tmp && /tmp/pngcrush -c 0 -ow /tmp/weather-script-output.png'
+    try:
+        subprocess.check_output(cmd2,shell=True,stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+    
     # Upload file to S3
     s3 = boto3.resource('s3')
     s3.meta.client.upload_file('/tmp/weather-script-output.png', 'cdn.kangaroonet.de', 'sf-weather.png', ExtraArgs={'ContentType': "image/png", 'ACL': "public-read"})
