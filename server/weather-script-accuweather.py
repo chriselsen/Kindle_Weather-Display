@@ -15,26 +15,29 @@ def lambda_handler(event, context):
     import subprocess
     from shutil import copyfile
     from urllib.request import urlopen
-
+    from PIL import Image
+    
     #
     # AccuWether API Key
     #
-    AccuWeatherAPIKey = "<API Key>"
+    AccuWeatherAPIKey = os.environ.get('AccuWeatherAPIKey')
 
     #
     # Geographic location
     #
-    AccuWetherLocation = "<Location Code>"
-    today = datetime.datetime.now(pytz.timezone("America/Los_Angeles"))
-    print('Current time: ' + str(today))
+    AccuWetherLocation = os.environ.get('AccuWetherLocation')
     
-	#
-	# Download and parse weather data
-	#
+    #
+    # Download and parse weather data
+    #
 
     # Fetch data (change lat and lon to desired location)
     weather_AccuWeather = urlopen('http://dataservice.accuweather.com/forecasts/v1/daily/5day/' + AccuWetherLocation + '?apikey=' + AccuWeatherAPIKey + '&metric=true')
     weather_json = json.loads(weather_AccuWeather.read())
+
+    # Parse dates
+    today = datetime.datetime.now(pytz.timezone("America/Los_Angeles"))
+    print('Current time: ' + str(today))
 
     # Determine if report for today or tomorrow
     cutoffTime = datetime.datetime.strptime('16:59','%H:%M')
@@ -94,7 +97,6 @@ def lambda_handler(event, context):
 
     # Open SVG to process
     output = codecs.open('weather-script-preprocess.svg', 'r', encoding='utf-8').read()
-
     output = output.replace('UPDATE', "AccuW: " + today.strftime("%H:%M"))
     output = output.replace('DATE', days_of_week[(day_one).weekday()] + ", " + day_one.strftime("%d.%m.%Y"))
 
@@ -113,23 +115,17 @@ def lambda_handler(event, context):
     codecs.open('/tmp/weather-script-output.svg', 'w', encoding='utf-8').write(output)
 
     # Convert SVG to PNG
-    copyfile('rsvg-convert', '/tmp/rsvg-convert')
-    os.chmod('/tmp/rsvg-convert', 0o775)
-    cmd1 = '/tmp/rsvg-convert --background-color=white -o /tmp/weather-script-output.png /tmp/weather-script-output.svg'
+    cmd1 = '/opt/bin/rsvg-convert --background-color=white -o /tmp/weather-script-output.png /tmp/weather-script-output.svg'
     try:
         subprocess.check_output(cmd1,shell=True,stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as e:
         raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
-
-    # PNGCrush the result for better results on Kindle
-    copyfile('pngcrush', '/tmp/pngcrush')
-    os.chmod('/tmp/pngcrush', 0o775)
-    cmd2 = 'cd /tmp && /tmp/pngcrush -c 0 -ow /tmp/weather-script-output.png'
-    try:
-        subprocess.check_output(cmd2,shell=True,stderr=subprocess.STDOUT)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+    
+    img = Image.open('/tmp/weather-script-output.png').convert('L')
+    img.save('/tmp/weather-grayscale.png')
     
     # Upload file to S3
-    s3 = boto3.resource('s3')
-    s3.meta.client.upload_file('/tmp/weather-script-output.png', '<bucket name>', 'sf-weather.png', ExtraArgs={'ContentType': "image/png", 'ACL': "public-read"})
+    S3BucketName = os.environ.get('S3BucketName')
+    S3FileName = os.environ.get('S3FileName')
+    s3 = boto3.client("s3")
+    s3.upload_file('/tmp/weather-grayscale.png', S3BucketName, S3FileName, ExtraArgs={'ContentType': "image/png"})
