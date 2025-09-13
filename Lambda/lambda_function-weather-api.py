@@ -16,9 +16,6 @@ def lambda_handler(event, context):
     from urllib.parse import quote
     from PIL import Image
 
-    def celsius_to_fahrenheit(c):
-        return int(round((c * 9/5) + 32))
-
     def weather_code_to_icon(code):
         condition_map = {
             1000: "skc",    # Clear/Sunny
@@ -81,9 +78,9 @@ def lambda_handler(event, context):
         if not all([WEATHER_API_KEY, S3BucketName, S3FileName]):
             raise ValueError("Missing required environment variables")
 
-        # Geographic location 
-        latitude = 
-        longitude = 
+        # Geographic location (San Francisco)
+        latitude = 37.774049
+        longitude = -122.395889
         location = f"{latitude},{longitude}"
 
         # Fetch weather data with timeout
@@ -123,8 +120,8 @@ def lambda_handler(event, context):
             day_index = i + lookupDay
             if day_index < len(forecast_days):
                 forecast_day = forecast_days[day_index]
-                highs.append(celsius_to_fahrenheit(forecast_day['day']['maxtemp_c']))
-                lows.append(celsius_to_fahrenheit(forecast_day['day']['mintemp_c']))
+                highs.append(int(round(forecast_day['day']['maxtemp_c'])))
+                lows.append(int(round(forecast_day['day']['mintemp_c'])))
                 icons.append(weather_code_to_icon(forecast_day['day']['condition']['code']))
 
         # Pad with None if we don't have enough days
@@ -139,7 +136,7 @@ def lambda_handler(event, context):
 
         # Replace placeholders
         replacements = {
-            'UPDATE': f"W-API: {today.strftime('%H:%M')}",
+            'UPDATE': f"WeatherAPI: {today.strftime('%H:%M')}",
             'DATE': f"{days_of_week[day_one.weekday()]}, {day_one.strftime('%d.%m.%Y')}",
             'ICON_ONE': icons[0],
             'ICON_TWO': icons[1],
