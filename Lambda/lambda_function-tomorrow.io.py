@@ -13,93 +13,63 @@ def lambda_handler(event, context):
     import subprocess
     from shutil import copyfile
     from urllib.request import urlopen, Request
-    from urllib.parse import quote
+    from urllib.parse import urlencode
     from PIL import Image
 
     def weather_code_to_icon(code):
-        # OpenWeatherMap weather codes
+        # tomorrow.io weather codes
+        # Reference: https://docs.tomorrow.io/reference/data-layers-weather-codes
         condition_map = {
-            # Thunderstorm
-            200: "tsra", # thunderstorm with light rain
-            201: "tsra", # thunderstorm with rain
-            202: "tsra", # thunderstorm with heavy rain
-            210: "tsra", # light thunderstorm
-            211: "tsra", # thunderstorm
-            212: "tsra", # heavy thunderstorm
-            221: "tsra", # ragged thunderstorm
-            230: "tsra", # thunderstorm with light drizzle
-            231: "tsra", # thunderstorm with drizzle
-            232: "tsra", # thunderstorm with heavy drizzle
-            # Drizzle
-            300: "hi_shwrs", # light intensity drizzle
-            301: "hi_shwrs", # drizzle
-            302: "hi_shwrs", # heavy intensity drizzle
-            310: "hi_shwrs", # light intensity drizzle rain
-            311: "hi_shwrs", # drizzle rain
-            312: "hi_shwrs", # heavy intensity drizzle rain
-            313: "hi_shwrs", # shower rain and drizzle
-            314: "hi_shwrs", # heavy shower rain and drizzle
-            321: "hi_shwrs", # shower drizzle
-            # Rain
-            500: "shra", # light rain
-            501: "ra",   # moderate rain
-            502: "ra",   # heavy intensity rain
-            503: "ra",   # very heavy rain
-            504: "ra",   # extreme rain
-            511: "fzra", # freezing rain
-            520: "shra", # light intensity shower rain
-            521: "shra", # shower rain
-            522: "shra", # heavy intensity shower rain
-            531: "shra", # ragged shower rain
+            # Clear / Cloudy
+            1000: "skc",     # clear
+            1100: "few",     # mostly clear
+            1101: "sct",     # partly cloudy
+            1102: "bkn",     # mostly cloudy
+            1001: "ovc",     # cloudy
+            # Fog
+            2100: "fg",      # fog light
+            2000: "fg",      # fog
+            # Drizzle / Rain
+            4000: "hi_shwrs", # drizzle
+            4200: "shra",    # rain light
+            4001: "ra",      # rain
+            4201: "ra",      # rain heavy
             # Snow
-            600: "sn",   # light snow
-            601: "sn",   # snow
-            602: "sn",   # heavy snow
-            611: "ip",   # sleet
-            612: "ip",   # light shower sleet
-            613: "ip",   # shower sleet
-            615: "rasn", # light rain and snow
-            616: "rasn", # rain and snow
-            620: "sn",   # light shower snow
-            621: "sn",   # shower snow
-            622: "sn",   # heavy shower snow
-            # Atmosphere
-            701: "fg",   # mist
-            711: "fg",   # smoke
-            721: "fg",   # haze
-            731: "fg",   # sand/dust whirls
-            741: "fg",   # fog
-            751: "fg",   # sand
-            761: "fg",   # dust
-            762: "fg",   # volcanic ash
-            771: "wind", # squalls
-            781: "torn", # tornado
-            # Clear/Clouds
-            800: "skc",  # clear sky
-            801: "few",  # few clouds: 11-25%
-            802: "sct",  # scattered clouds: 25-50%
-            803: "bkn",  # broken clouds: 51-84%
-            804: "ovc",  # overcast clouds: 85-100%
+            5001: "sn",      # flurries
+            5100: "sn",      # snow light
+            5000: "sn",      # snow
+            5101: "sn",      # snow heavy
+            # Freezing precipitation
+            6000: "fzra",    # freezing drizzle
+            6200: "fzra",    # freezing rain light
+            6001: "fzra",    # freezing rain
+            6201: "fzra",    # freezing rain heavy
+            # Ice pellets / sleet
+            7102: "ip",      # ice pellets light
+            7000: "ip",      # ice pellets
+            7101: "ip",      # ice pellets heavy
+            # Thunderstorm
+            8000: "tsra",    # thunderstorm
         }
         return condition_map.get(code, "skc")
 
     try:
         # Configuration
-        OPENWEATHER_API_KEY = os.environ.get('OPENWEATHER_API_KEY')
+        TOMORROW_API_KEY = os.environ.get('TOMORROW_API_KEY')
         S3BucketName = os.environ.get('S3BucketName')
         S3FileName = os.environ.get('S3FileName')
         LATITUDE = os.environ.get('LATITUDE')
         LONGITUDE = os.environ.get('LONGITUDE')
-        
+
         # Validate all required environment variables
         required_vars = {
-            'OPENWEATHER_API_KEY': OPENWEATHER_API_KEY,
+            'TOMORROW_API_KEY': TOMORROW_API_KEY,
             'S3BucketName': S3BucketName,
             'S3FileName': S3FileName,
             'LATITUDE': LATITUDE,
             'LONGITUDE': LONGITUDE
         }
-        
+
         missing_vars = [k for k, v in required_vars.items() if not v]
         if missing_vars:
             raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
@@ -110,15 +80,21 @@ def lambda_handler(event, context):
         except ValueError:
             raise ValueError("LATITUDE and LONGITUDE must be valid numbers")
 
-        # Fetch weather data with timeout
-        weather_url = f'https://api.openweathermap.org/data/2.5/forecast?lat={latitude}&lon={longitude}&appid={OPENWEATHER_API_KEY}&units=metric'
+        # Fetch daily forecast from tomorrow.io
+        # The /weather/forecast endpoint returns hourly and daily timelines in one call.
+        # We request metric units; daily values include temperatureMax, temperatureMin,
+        # and weatherCodeMax (the dominant weather code for the day).
+        params = urlencode({
+            'location': f'{latitude},{longitude}',
+            'units': 'metric',
+            'apikey': TOMORROW_API_KEY,
+        })
+        weather_url = f'https://api.tomorrow.io/v4/weather/forecast?{params}'
         request = Request(weather_url, headers={'User-Agent': 'AWS Lambda Weather Function'})
-        
+
         try:
-            with urlopen(request, timeout=5) as response:
+            with urlopen(request, timeout=10) as response:
                 weather_json = json.loads(response.read())
-                if weather_json.get('cod') != '200' and weather_json.get('cod') != 200:
-                    raise Exception(f"Weather API error: {weather_json.get('message', 'Unknown error')}")
         except Exception as e:
             print(f"Error fetching weather data: {str(e)}")
             raise
@@ -128,44 +104,53 @@ def lambda_handler(event, context):
         print('Current time:', today.strftime("%Y-%m-%d %H:%M %Z"))
 
         # Determine if report for today or tomorrow
-        cutoffTime = datetime.datetime.strptime('16:59','%H:%M')
+        cutoffTime = datetime.datetime.strptime('16:59', '%H:%M')
         lookupDay = 1 if today.time() >= cutoffTime.time() else 0
         day_one = today + datetime.timedelta(days=lookupDay)
 
         days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
-        # Parse temperatures & icons - Optimized version
-        highs = [float('-inf')] * 4
-        lows = [float('inf')] * 4
-        weather_codes = [[] for _ in range(4)]
-        
-        base_date = day_one.date()
-        
-        # Process each forecast entry
-        for item in weather_json['list']:
-            dt = datetime.datetime.fromtimestamp(item['dt'], pytz.timezone("America/Los_Angeles"))
-            day_diff = (dt.date() - base_date).days
-            
-            if 0 <= day_diff < 4:  # Only process next 4 days
-                highs[day_diff] = max(highs[day_diff], item['main']['temp_max'])
-                lows[day_diff] = min(lows[day_diff], item['main']['temp_min'])
-                weather_codes[day_diff].append(item['weather'][0]['id'])
+        # Extract daily forecast data
+        # Response structure: weather_json['timelines']['daily'] is a list of daily intervals.
+        # Each interval has 'time' (ISO 8601) and 'values' containing temperatureMax,
+        # temperatureMin, and weatherCodeMax.
+        daily_intervals = weather_json.get('timelines', {}).get('daily', [])
+        if not daily_intervals:
+            raise ValueError("No daily forecast data returned from tomorrow.io API")
 
-        # Convert temperatures and get icons
+        # Build a dict keyed by date for easy lookup
+        daily_by_date = {}
+        for interval in daily_intervals:
+            # 'time' is an ISO 8601 string, e.g. "2024-01-15T06:00:00Z"
+            dt_utc = datetime.datetime.fromisoformat(interval['time'].replace('Z', '+00:00'))
+            dt_local = dt_utc.astimezone(pytz.timezone("America/Los_Angeles"))
+            date_key = dt_local.date()
+            daily_by_date[date_key] = interval['values']
+
+        # Collect data for 4 days starting from day_one
+        highs = []
+        lows = []
         icons = []
+
+        base_date = day_one.date()
         for i in range(4):
-            if highs[i] != float('-inf'):
-                highs[i] = int(round(highs[i]))
-                lows[i] = int(round(lows[i]))
-                # Get most common weather code for the day
-                most_common = max(set(weather_codes[i]), key=weather_codes[i].count) if weather_codes[i] else 800
-                icons.append(weather_code_to_icon(most_common))
+            target_date = base_date + datetime.timedelta(days=i)
+            values = daily_by_date.get(target_date)
+            if values:
+                high = int(round(values.get('temperatureMax', 0)))
+                low = int(round(values.get('temperatureMin', 0)))
+                # weatherCodeMax represents the dominant (most severe) weather code for the day
+                code = values.get('weatherCodeMax', 1000)
+                icon = weather_code_to_icon(code)
+                highs.append(high)
+                lows.append(low)
+                icons.append(icon)
             else:
-                highs[i] = None
-                lows[i] = None
+                highs.append(None)
+                lows.append(None)
                 icons.append("skc")
 
-        # Add detailed logging here, before SVG processing
+        # Logging
         print(f"Location: {latitude}, {longitude}")
         print(f"Processing forecast for: {day_one.strftime('%Y-%m-%d')}")
         print(f"Temperatures (°C) - Next 4 days:")
@@ -178,7 +163,7 @@ def lambda_handler(event, context):
 
         # Replace placeholders
         replacements = {
-            'UPDATE': f"OpenW: {today.strftime('%H:%M')}",
+            'UPDATE': f"Tmrw.io:{today.strftime('%H:%M')}",
             'DATE': f"{days_of_week[day_one.weekday()]}, {day_one.strftime('%d.%m.%Y')}",
             'ICON_ONE': icons[0],
             'ICON_TWO': icons[1],
@@ -221,9 +206,9 @@ def lambda_handler(event, context):
         # Upload file to S3
         s3 = boto3.client("s3")
         s3.upload_file(
-            '/tmp/weather-grayscale.png', 
-            S3BucketName, 
-            S3FileName, 
+            '/tmp/weather-grayscale.png',
+            S3BucketName,
+            S3FileName,
             ExtraArgs={'ContentType': "image/png"}
         )
 

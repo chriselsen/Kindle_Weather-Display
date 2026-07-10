@@ -136,7 +136,7 @@ def lambda_handler(event, context):
 
         # Replace placeholders
         replacements = {
-            'UPDATE': f"WeatherAPI: {today.strftime('%H:%M')}",
+            'UPDATE': f"WeatherAPI:{today.strftime('%H:%M')}",
             'DATE': f"{days_of_week[day_one.weekday()]}, {day_one.strftime('%d.%m.%Y')}",
             'ICON_ONE': icons[0],
             'ICON_TWO': icons[1],
