@@ -39,9 +39,11 @@ echo "==> Installing packages inside container"
 # the Lambda execution environment (Amazon Linux 2023).
 docker run --rm \
   --platform linux/amd64 \
+  --entrypoint pip \
+  --user "$(id -u):$(id -g)" \
   -v "${BUILD_DIR}:/layer" \
   "${IMAGE}" \
-  pip install \
+  install \
     --no-cache-dir \
     --upgrade \
     --platform manylinux2014_x86_64 \

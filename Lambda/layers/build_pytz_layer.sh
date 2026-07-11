@@ -33,9 +33,11 @@ docker pull --platform linux/amd64 "${IMAGE}"
 echo "==> Installing packages inside container"
 docker run --rm \
   --platform linux/amd64 \
+  --entrypoint pip \
+  --user "$(id -u):$(id -g)" \
   -v "${BUILD_DIR}:/layer" \
   "${IMAGE}" \
-  pip install \
+  install \
     --no-cache-dir \
     --upgrade \
     --target "/layer/python/lib/${RUNTIME}/site-packages" \
