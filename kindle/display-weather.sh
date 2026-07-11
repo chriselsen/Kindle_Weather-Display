@@ -49,6 +49,7 @@ wait_while_charging () {
 				download_llb keep_wifi
 				display_image $FN
 				DOWNLOAD_IMG="NO"
+				DEFER_STAY_AWAKE="NO"
 			fi
 			sleep 60
 		done
@@ -432,6 +433,7 @@ if is_charging; then
 	download_llb keep_wifi
 	display_image $FN
 	DOWNLOAD_IMG="NO"
+	DEFER_STAY_AWAKE="NO"
 	# Enter the charging loop — keeps WiFi up, services scheduled
 	# downloads every 60s, and exits when the charger is disconnected.
 	msg "Entering charging loop — WiFi stays on until unplugged."
@@ -442,6 +444,7 @@ if is_charging; then
 			download_llb keep_wifi
 			display_image $FN
 			DOWNLOAD_IMG="NO"
+			DEFER_STAY_AWAKE="NO"
 		fi
 		sleep 60
 	done
