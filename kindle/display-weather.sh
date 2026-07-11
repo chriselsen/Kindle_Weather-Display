@@ -416,13 +416,19 @@ DL_FAILED="NO"
 # -------------------------------
 # START: THIRD BLOCK: INFINITE LOOP
 
-# Startup: wait for powerd to fully initialize, then check if externally
-# powered before entering the main loop.
+# Startup: give powerd time to initialize, then force screensaver state
+# (device boots into Active; without framework the screensaver never fires
+# naturally, so we simulate a power button press to enter it).
+# Then do an immediate download and enter the normal loop.
 sleep 10
+msg "Startup: forcing screensaver state."
+powerd_test -p
+
+# Check charging state for WiFi management
 if is_charging; then
 	msg "Startup: external power detected — enabling WiFi."
 	lipc-set-prop com.lab126.cmd wirelessEnable 1
-	# Do an immediate download on startup while already in active state
+	# Do an immediate download on startup
 	download_llb keep_wifi
 	display_image $FN
 	DOWNLOAD_IMG="NO"
@@ -443,11 +449,8 @@ if is_charging; then
 	done
 	msg "Charger disconnected — turning WiFi off, resuming normal sleep cycle."
 	lipc-set-prop com.lab126.cmd wirelessEnable 0
-else
-	# Not charging — wait for the user to press the power button
-	# (entering screensaver) before starting the main loop.
-	wait_for_ss
 fi
+# Whether charging or not, fall through to the normal main loop
 
 # Never-ending main loop
 while [ 1 -eq 1 ]; do
