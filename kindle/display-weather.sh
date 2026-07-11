@@ -6,18 +6,57 @@ trap "msg 'Trap'" SIGHUP SIGINT SIGTERM
 # START: FIRST BLOCK: FUNCTIONS
 
 send_log () {
-	
 	BATT=`gasgauge-info -s`
 	VOLT=`gasgauge-info -v`
 	LOAD=`gasgauge-info -l`
 	TEMP=`gasgauge-info -k`
 	CAPA=`gasgauge-info -m`
 	JSON="'{\"battery\":\"${BATT}\",\"voltage\":\"${VOLT}\",\"load\":\"${LOAD}\",\"temp\":\"${TEMP}\",\"capacity\":\"${CAPA}\"}'"
-	echo "curl -H `echo ${TELE_API_KEY}` -d `echo ${JSON}` ${TELE_URL}" | sh
-	if [ $? ]; then
+	echo "curl -k -H `echo ${TELE_API_KEY}` -d `echo ${JSON}` ${TELE_URL}" | sh
+	if [ $? -eq 0 ]; then
 		msg "Telemetry send!"
 	else
 		msg "Could not send Telemetry..."
+	fi
+}
+
+is_charging () {
+	# gasgauge-info -s returns the battery percentage with a leading sign:
+	#   "+95" means charging, "-95" means discharging.
+	# Returns 0 (true) if charging, 1 (false) if not.
+	BATT_STATUS=`gasgauge-info -s`
+	case "$BATT_STATUS" in
+		+*) return 0 ;;  # leading '+' means charger is connected
+		*)  return 1 ;;
+	esac
+}
+
+wait_while_charging () {
+	# When the Kindle is on a charger, powerd will not enter deep suspend
+	# and rtcWakeup will not fire, leaving the device in a limbo state.
+	# While charging we keep WiFi up (for SSH access) and still service
+	# scheduled downloads. Once the charger is disconnected we turn WiFi
+	# off and let the normal sleep path proceed to deep suspend.
+	if is_charging; then
+		msg "Charger connected — keeping WiFi on. Waiting for unplug."
+		lipc-set-prop com.lab126.cmd wirelessEnable 1
+
+		while is_charging; do
+			# Check every 60 s whether a scheduled download is due
+			calc_wakeup
+			if [ "$DOWNLOAD_IMG" = "YES" ]; then
+				msg "Charging: scheduled download triggered."
+				download_llb
+				display_image $FN
+				# Keep WiFi on after download while still charging
+				lipc-set-prop com.lab126.cmd wirelessEnable 1
+				DOWNLOAD_IMG="NO"
+			fi
+			sleep 60
+		done
+
+		msg "Charger disconnected — turning WiFi off, resuming sleep cycle."
+		lipc-set-prop com.lab126.cmd wirelessEnable 0
 	fi
 }
 
@@ -36,24 +75,29 @@ wait_for_ready () {
 	# Wait for "Ready to Suspend" state
 	msg "Waiting for Ready: `powerd_test -s | grep Remaining | awk '{print $6}'` s left in '`powerd_test -s | grep Power | awk '{print $3 $4}'`'"
 	PSTATE=`powerd_test -s | grep Ready`
-	# Only first call after Suspend/screensaver should enter the loop
+	# AWAKE_AGAIN tracks whether we entered the loop (i.e. we had to wait)
+	AWAKE_AGAIN="NO"
 	while [ "$PSTATE" = "" ]; do
 		sleep 1
 		PSTATE=`powerd_test -s | grep Ready`
 		AWAKE_AGAIN="YES"
 	done
 	msg "In state Ready: `powerd_test -s | grep Remaining | awk '{print $6}'` s left in '`powerd_test -s | grep Power | awk '{print $3 $4}'`'"
-	# if that was the first call, we write the default wakeup to always wake up again.
+	# If we had to wait, the device woke up from suspend — recalculate.
 	if [ "$AWAKE_AGAIN" = "YES" ]; then
-		# We are awake again! Check only once the ACTIONS
 		msg "------------------------------------------"
 		msg "Recalculate and set next wakeup or action!"
 		DOWNLOAD_IMG="YES"
 
-		# output: WAKE_TIME and DOWLOAD_IMG
+		# output: WAKE_TIME and DOWNLOAD_IMG
 		calc_wakeup
 
 		WAKEUP_S=$WAKE_TIME
+
+		# Do not set the RTC wakeup while charging — powerd will not
+		# suspend properly on a charger, so wait for unplug first.
+		wait_while_charging
+
 		write_wakeup
 		AWAKE_AGAIN="NO"
 	fi
@@ -62,7 +106,7 @@ wait_for_ready () {
 msg () {
 	echo "`date`: $1" >> $LOG_FILE
 	if [ "$DEBUG" = "YES" ]; then
-		echo "`date`: $1" 
+		echo "`date`: $1"
 		eips 1 $EIPSROW "$1"
 		if [ $EIPSROW -le 39 ]; then
 			EIPSROW=`expr $EIPSROW + 1`
@@ -74,72 +118,69 @@ msg () {
 }
 
 calc_wakeup () {
-	# this function returns WAKE_TIME and set DOWNLOAD_IMG
+	# this function returns WAKE_TIME and sets DOWNLOAD_IMG
 	# CHECK TIME, and recalc sleep timer
 	CURRENT_TIME=`date +%s`
 
-	# daily basis
-	D_TIME=`expr $CURRENT_TIME % "86400"`
-	# initialize WAKE_TIME_set (internal of output WAKE_TIME)
+	# seconds elapsed since midnight
+	D_TIME=`expr $CURRENT_TIME % 86400`
+	# initialize WAKE_TIME_set (internal; output is WAKE_TIME)
 	WAKE_TIME_set=$WAKEUP_CHECK_DEFAULT
 
-	if [ "$DL_FAILED" == "YES" ]; then
+	if [ "$DL_FAILED" = "YES" ]; then
 		# We could not load image last time - FAIL mode
 		msg_str_d="Fail Mode, retry in $WAKEUP_CHECK_DEFAULT_FAIL s."
 		CURR_ACTION="Fail mode"
 		WAKE_TIME_set=$WAKEUP_CHECK_DEFAULT_FAIL
 		DEFER_STAY_AWAKE="NO"
 	else
-		# see if there is an action coming close, if so, manipulate WAKE_TIME_set
-	        # get closest action
+		# find the closest upcoming action
 		WAKE_TIME_set=$WAKEUP_CHECK_DEFAULT
 		CURR_ACTION="Default wakeup"
-		for ACTION in `echo $ACTION_TIME | awk '{ s = ""; for (i = 1; i <= NF; i++) print $i }'`; do
-			# convert hh:ss into seconds since 00:00
+		for ACTION in `echo $ACTION_TIME | awk '{ for (i = 1; i <= NF; i++) print $i }'`; do
+			# convert hh:mm into seconds since 00:00
 			DESIRED=`echo $ACTION | sed 's/:/ /g' | awk '{print ($1*3600)+($2*60)}'`
-			DIFF_TIME_V=`expr $DESIRED - $D_TIME`;
-			DIFF_TIME=$DIFF_TIME_V
-			
-			# Determine if the time refers to tomorrow
+			DIFF_TIME_V=`expr $DESIRED - $D_TIME`
+
+			# If the action is more than 2 minutes in the past, treat it as tomorrow
 			if [ $DIFF_TIME_V -le -120 ]; then
-				DIFF_TIME=`expr 86400 + $DIFF_TIME_V`;
-			else				
+				DIFF_TIME=`expr 86400 + $DIFF_TIME_V`
+			else
 				DIFF_TIME=$DIFF_TIME_V
 			fi
 
 			if [ $DIFF_TIME -lt $WAKE_TIME_set ]; then
 				if [ $DIFF_TIME -ge 120 ]; then
-					# we remove some time, to not wake up to late.
+					# Wake up 2 min early so we don't miss the window
 					WAKE_TIME_set=`expr $DIFF_TIME - 120`
 					CURR_ACTION=$ACTION
 				elif [ $DIFF_TIME -gt -120 ] && [ $DIFF_TIME -lt 120 ]; then
-					# ok, download!
+					# We are right on time — download now
 					WAKE_TIME_set=0
 					CURR_ACTION=$ACTION
 				else
-					# action past
+					# action is past
 					msg "$ACTION: $DIFF_TIME s since the action - sleep again!"
 				fi
 			else
 				msg "$ACTION: $DIFF_TIME is larger than $WAKE_TIME_set - sleep again!"
 			fi
 		done
-		# charaterize action
+
+		# characterize action
 		if [ $WAKE_TIME_set -lt $WAKEUP_CHECK_DEFAULT ]; then
-			# We are really close to the event, trigger download.
-			if [ $WAKE_TIME_set  -lt $STAY_AWAKE ] && [ "$DEFER_STAY_AWAKE" == "NO" ]; then
+			# We are close to the event
+			if [ $WAKE_TIME_set -lt $STAY_AWAKE ] && [ "$DEFER_STAY_AWAKE" = "NO" ]; then
 				DOWNLOAD_IMG="YES"
-				msg_str_d="only $WAKE_TIME_set s away from ' $CURR_ACTION ' action, trigger Download."
+				msg_str_d="only $WAKE_TIME_set s away from '$CURR_ACTION', trigger Download."
 				DEFER_STAY_AWAKE="YES"
-				# We are close, but its worse going into sleep again
 			else
-				msg_str_d="$WAKE_TIME_set s from ' $CURR_ACTION ' away, will sleep again"
+				msg_str_d="$WAKE_TIME_set s from '$CURR_ACTION' away, will sleep again"
 				DOWNLOAD_IMG="NO"
 				DEFER_STAY_AWAKE="NO"
 			fi
-		# We are hours away, we will sleep for WAKEUP_CHECK_DEFAULT
 		else
-			msg_str_d="More than $WAKEUP_CHECK_DEFAULT s from next action away, will sleep again"
+			msg_str_d="More than $WAKEUP_CHECK_DEFAULT s from next action, will sleep again"
 			DOWNLOAD_IMG="NO"
 			DEFER_STAY_AWAKE="NO"
 		fi
@@ -164,11 +205,11 @@ download_llb () {
 		WIFI_STATE=`/usr/bin/lipc-get-prop com.lab126.wifid cmState | grep CONNECTED`
 		if [ "$WIFI_STATE" = "CONNECTED" ]; then
 			CONNECTED=1
-		fi	
+		fi
 
-		# if we can't, checkout timeout or sleep for 1s
+		# if not connected, check timeout or sleep 1s
 		if [ 0 -eq $CONNECTED ]; then
-			TIMER=$(($TIMER-1))
+			TIMER=`expr $TIMER - 1`
 			if [ 0 -eq $TIMER ]; then
 				msg "No internet connection after ${NETWORK_TIMEOUT} seconds, aborting."
 				break
@@ -179,6 +220,7 @@ download_llb () {
 	done
 
 	sleep $PRE_SLEEP
+
 	# download
 	if [ 1 -eq $CONNECTED ]; then
 		msg "WIFI connected, start download ..."
@@ -186,13 +228,12 @@ download_llb () {
 		if [ -f $FN_TEMP ]; then
 			rm $FN_TEMP
 			msg "Removing old temp file"
-		fi	
+		fi
 
-		#wget -O $FN_TEMP $IMG_URL
-		curl -o $FN_TEMP $IMG_URL
+		curl -k -o $FN_TEMP $IMG_URL
 		if [ $? -eq 0 ]; then
-			# Sucess
-			msg "Download image successfull"
+			# Success
+			msg "Download image successful"
 			if [ -f $FN ]; then
 				rm $FN
 			fi
@@ -209,17 +250,16 @@ download_llb () {
 			if [ -f $FN ]; then
 				rm $FN
 			fi
-                       
 			cp $FN_ERROR $FN
 		fi
 		DOWNLOAD_IMG="NO"
-	
+
 		# sync the time
 		ntpdate $NTP_SERVER
 		if [ $? -ne 0 ]; then
 			msg "Could not receive current time!"
 		else
-			msg "Time sync successfull"
+			msg "Time sync successful"
 			hwclock -w
 		fi
 
@@ -242,7 +282,7 @@ download_llb () {
 set_retries () {
 	# Retries failed beyond retries limit
 	if [ $RETRIES -gt $DL_RETRIES ]; then
-		msg "$RETRIES times failed to download llb. Switch to normal wake up intervals!"
+		msg "$RETRIES times failed to download. Switch to normal wake up intervals!"
 		DOWNLOAD_IMG="YES"
 		DL_FAILED="NO"
 		DEFER_STAY_AWAKE="NO"
@@ -254,36 +294,35 @@ set_retries () {
 write_wakeup () {
 	# Write the RTC wake up timer while in readyToSuspend state
 	if [ $WAKEUP_S -lt $WAKEUP_MINIMAL ]; then
-		msg "Desired wakeup in '$WAKEUP_S' smaller than 'WAKEUP_MINIMAL', reset to $WAKEUP_MINIMAL"
+		msg "Desired wakeup '$WAKEUP_S' smaller than WAKEUP_MINIMAL, reset to $WAKEUP_MINIMAL"
 		WAKEUP_S=$WAKEUP_MINIMAL
 	fi
 	TIME_LEFT=`powerd_test -s | grep Remaining | awk '{print int($6)}'`
 
-	# go to sleep.
-	if [ $DEFER_STAY_AWAKE == "NO" ]; then
-		# make sure that we have enough time to process 'write_wakeup'
+	if [ "$DEFER_STAY_AWAKE" = "NO" ]; then
+		# Make sure we have enough time left in readyToSuspend to set the wakeup
 		if [ $TIME_LEFT -gt $LATEST_WAKEUP_SET ]; then
-			while [ `lipc-get-prop com.lab126.powerd state` = "readyToSuspend" ]; do
-				lipc-set-prop -i com.lab126.powerd rtcWakeup $WAKEUP_S 
-				SUCESS_SET_WAKEUP=$?
-				if [ $SUCESS_SET_WAKEUP -eq 0 ]; then
-					echo "set rtcWakeup to $WAKEUP_S" 
+			while [ "`lipc-get-prop com.lab126.powerd state`" = "readyToSuspend" ]; do
+				lipc-set-prop -i com.lab126.powerd rtcWakeup $WAKEUP_S
+				SUCCESS_SET_WAKEUP=$?
+				if [ $SUCCESS_SET_WAKEUP -eq 0 ]; then
+					msg "Set rtcWakeup to $WAKEUP_S s"
 				else
-					msg "Huch? Could not set wake up to '$WAKEUP_S'. Error '$SUCESS_SET_WAKEUP'"
+					msg "Could not set wakeup to '$WAKEUP_S'. Error '$SUCCESS_SET_WAKEUP'"
 				fi
 				sleep 1
 			done
 		else
-			msg "We are to late, to set wakeup ..."
+			msg "Too late to set wakeup (only ${TIME_LEFT}s left, need >${LATEST_WAKEUP_SET}s)"
 		fi
-		# next round is download, stay awake!
 	else
+		# next round is a download — stay awake
 		DOWNLOAD_IMG="YES"
-		# we are in ready to suspend, hit it once to get to active
+		# hit once to transition from readyToSuspend back to active
 		powerd_test -p
-		msg "Oh, we will download soon !"
+		msg "Will download soon — staying awake!"
 		sleep 10
-		# hit a second time to go screensaver
+		# hit a second time to go to screensaver
 		powerd_test -p
 	fi
 }
@@ -305,69 +344,70 @@ display_image () {
 
 
 # -------------------------------
-# START: SECOND BLOCK: VARIABELS
+# START: SECOND BLOCK: VARIABLES
 
-# Define ACTIONs
+# Define ACTIONs (hh:mm, space-separated)
 ACTION_TIME="01:01 13:01"
 
-# Debug 
+# Debug
 DEBUG="NO"
 
-# Dont sleep 4 min before action
+# Don't sleep within this many seconds of an action
 STAY_AWAKE="240"
-# wake and check time every 24 hour
-WAKEUP_CHECK_DEFAULT=86400
-# if fail, retry to DL every 10 min
+# Default wake-and-check interval: 12 h (capped below max action gap of ~13 h)
+WAKEUP_CHECK_DEFAULT=43200
+# If download failed, retry every 10 min
 WAKEUP_CHECK_DEFAULT_FAIL=600
-# retries after failure, before switch to normal WAKEUP_CHECK_DEFAULT
+# Retries after failure before switching back to normal intervals
 DL_RETRIES=3
-# Minimal sleep time in seconds
+# Minimum sleep time in seconds
 WAKEUP_MINIMAL=60
-# rtcWakeup should not be set less than X second before sleep
-LATEST_WAKEUP_SET=0
+# Do not attempt to set rtcWakeup if fewer than this many seconds remain
+# in the readyToSuspend window (0 = always try, 5 is a safer value)
+LATEST_WAKEUP_SET=5
 
 # WIFI
 NETWORK_TIMEOUT=60
-# time to wait after switching WIFI on
-#+wait this time again, after detecting WIFI connecting
-PRE_SLEEP=1;
-NTP_SERVER="us.pool.ntp.org"
-IMG_URL="https://<bucketname>.s3.dualstack.us-west-2.amazonaws.com/weather.png"
+# Time to wait after switching WIFI on before checking connection
+PRE_SLEEP=1
+NTP_SERVER="0.pool.ntp.org"
 
-# Telemetry
-TELE_URL="https://<apiname>.execute-api.us-west-2.amazonaws.com/prod/KindleTelemetry"
-TELE_API_KEY="'x-api-key: 12345678'"
+# Load secrets (IMG_URL, TELE_URL, TELE_API_KEY)
+SECRETS_FILE="$(dirname $0)/weather-secrets.sh"
+if [ ! -f "$SECRETS_FILE" ]; then
+	echo "ERROR: secrets file not found: $SECRETS_FILE" >&2
+	echo "Copy kindle/weather-secrets.sh.example to kindle/weather-secrets.sh and fill in your values." >&2
+	exit 1
+fi
+. "$SECRETS_FILE"
 
 # Image file and folder
 FOLDER="/mnt/us/weather"
 FN_TEMP=$FOLDER/llb_temp.png
 FN_ERROR=$FOLDER/weather-image-error.png
-FN=$FOLDER/weather.png
+FN=$FOLDER/sf-weather.png
 
-# Display standard image
+# Display error image on startup
 cp $FN_ERROR $FN
 
-#Log File
+# Log File
 LOG_FILE="/mnt/us/weather/display-weather.log"
-# initialize empty Log-File
+# Start with a fresh log on each run
 if [ -f "$LOG_FILE" ]; then
 	rm $LOG_FILE
 fi
 touch $LOG_FILE
 
-# Set internal start values:
-# Set EIPS debug output start row
+# Internal start values
 EIPSROW=1
-# load the image in first round
 DOWNLOAD_IMG="YES"
-# we do not wake up accurately on time, do the action in a timespan
 DEFER_STAY_AWAKE="NO"
+AWAKE_AGAIN="NO"
 WAKEUP_S=$WAKEUP_CHECK_DEFAULT
 RETRIES=1
 DL_FAILED="NO"
-NO_WAKEUP_DEAMON=0
 
-# END: SECOND BLOCK: VARIABELS
+# END: SECOND BLOCK: VARIABLES
 # -------------------------------
 #
 #################################
@@ -375,35 +415,33 @@ NO_WAKEUP_DEAMON=0
 # -------------------------------
 # START: THIRD BLOCK: INFINITE LOOP
 
-
-# initial wait until user pressed power button to start the main loop
+# Initial wait: user presses power button to enter screensaver and start loop
 wait_for_ss
 
-# Start never ending loop...
-# -------------------------------
+# Never-ending main loop
 while [ 1 -eq 1 ]; do
-	# DOWNLOAD_IMG
+
 	if [ "$DOWNLOAD_IMG" = "YES" ]; then
-		# Download will be performed in 'active'-mode:
-		# we need to wait for screen save: never simulate the power
-		# button in 'active' and bring the kindle into never ending sleep
+		# Download is performed in 'active' mode.
+		# First enter screensaver so we can safely simulate a power button
+		# press without sending the device into an unrecoverable sleep.
 		wait_for_ss
-		# turn into active:
+		# Transition to active
 		powerd_test -p
-		#returns DL_FAILED="NO" if succesfull download
+		# Download (sets DL_FAILED, DEFER_STAY_AWAKE, DOWNLOAD_IMG)
 		download_llb
-		# switch back to screensave
+		# Return to screensaver
 		powerd_test -p
-		# display most recent image, or if failed display the last image...
+		# Display the freshly downloaded image (or error image on failure)
 		display_image $FN
 	fi
 
-	# SET WAKE UP
-	# this wait statement does check if we need to sleep again,
-	# AND recalc the wakeup time and set the rtcWakeup as well
+	# Wait for readyToSuspend, recalculate wakeup time, and set rtcWakeup.
+	# Also handles the charging-aware sleep path via wait_while_charging.
 	wait_for_ready
 	sleep 1
 	msg "Mainloop: `powerd_test -s | grep Remaining | awk '{print $6}'` s in '`powerd_test -s | grep Power | awk '{print $3 $4}'`'"
+
 done
 
 # END: THIRD BLOCK: INFINITE LOOP

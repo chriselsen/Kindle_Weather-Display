@@ -1,0 +1,17 @@
+{
+  "version": "2.0",
+  "routeKey": "$default",
+  "rawPath": "/KindleBattery",
+  "rawQueryString": "",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "requestContext": {
+    "http": {
+      "method": "POST",
+      "path": "/KindleBattery"
+    }
+  },
+  "body": "eyJiYXR0ZXJ5IjoiOTUlIiwidm9sdGFnZSI6IjM4MDAgbVYiLCJsb2FkIjoiLTIwMCBtQSIsInRlbXAiOiI3NSBGYWhyZW5oZWl0IiwiY2FwYWNpdHkiOiIxNTAwIG1BaCJ9",
+  "isBase64Encoded": true
+}
