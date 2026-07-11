@@ -21,14 +21,9 @@ send_log () {
 }
 
 is_charging () {
-	# gasgauge-info -s returns the battery percentage with a leading sign:
-	#   "+95" means charging, "-95" means discharging.
-	# Returns 0 (true) if charging, 1 (false) if not.
-	BATT_STATUS=`gasgauge-info -s`
-	case "$BATT_STATUS" in
-		+*) return 0 ;;  # leading '+' means charger is connected
-		*)  return 1 ;;
-	esac
+	# Returns 0 (true) if the charger is connected, 1 (false) if not.
+	# lipc-get-prop com.lab126.powerd isCharging returns "1" when charging.
+	[ "`lipc-get-prop com.lab126.powerd isCharging`" = "1" ]
 }
 
 wait_while_charging () {
