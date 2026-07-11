@@ -92,6 +92,29 @@ wait_for_ready () {
 		# suspend properly on a charger, so wait for unplug first.
 		wait_while_charging
 
+		# Extra check: even if isCharging=0 (battery full), USB may still
+		# be connected and preventing suspend. Test by checking if we are
+		# still in readyToSuspend after a brief pause — if so, treat as
+		# externally powered and enable WiFi instead of arming the RTC timer.
+		sleep 2
+		if [ "`lipc-get-prop com.lab126.powerd state`" = "readyToSuspend" ]; then
+			lipc-set-prop -i com.lab126.powerd rtcWakeup $WAKEUP_S
+			sleep 3
+			if [ "`lipc-get-prop com.lab126.powerd state`" = "readyToSuspend" ]; then
+				msg "Device still in readyToSuspend after rtcWakeup — USB likely connected. Enabling WiFi."
+				lipc-set-prop com.lab126.cmd wirelessEnable 1
+				# Hold here until device finally suspends (USB unplugged)
+				while [ "`lipc-get-prop com.lab126.powerd state`" = "readyToSuspend" ]; do
+					lipc-set-prop -i com.lab126.powerd rtcWakeup $WAKEUP_S
+					sleep 10
+				done
+				lipc-set-prop com.lab126.cmd wirelessEnable 0
+				msg "Device left readyToSuspend — resuming normal cycle."
+				AWAKE_AGAIN="NO"
+				return
+			fi
+		fi
+
 		write_wakeup
 		AWAKE_AGAIN="NO"
 	fi
@@ -303,7 +326,6 @@ write_wakeup () {
 	if [ "$DEFER_STAY_AWAKE" = "NO" ]; then
 		# Make sure we have enough time left in readyToSuspend to set the wakeup
 		if [ $TIME_LEFT -gt $LATEST_WAKEUP_SET ]; then
-			WAKEUP_ATTEMPTS=0
 			while [ "`lipc-get-prop com.lab126.powerd state`" = "readyToSuspend" ]; do
 				lipc-set-prop -i com.lab126.powerd rtcWakeup $WAKEUP_S
 				SUCCESS_SET_WAKEUP=$?
@@ -312,23 +334,7 @@ write_wakeup () {
 				else
 					msg "Could not set wakeup to '$WAKEUP_S'. Error '$SUCCESS_SET_WAKEUP'"
 				fi
-				WAKEUP_ATTEMPTS=`expr $WAKEUP_ATTEMPTS + 1`
-				if [ $WAKEUP_ATTEMPTS -ge 3 ]; then
-					msg "Device not suspending after $WAKEUP_ATTEMPTS rtcWakeup attempts — assuming external power, enabling WiFi."
-					lipc-set-prop com.lab126.cmd wirelessEnable 1
-					# Wait in a holding loop until the device actually suspends
-					# (i.e. USB is unplugged and deep sleep becomes possible)
-					while [ "`lipc-get-prop com.lab126.powerd state`" = "readyToSuspend" ]; do
-						lipc-set-prop -i com.lab126.powerd rtcWakeup $WAKEUP_S
-						sleep 30
-					done
-					# Device left readyToSuspend — either suspended or woke up.
-					# Turn WiFi off and return; the main loop will re-check charging.
-					lipc-set-prop com.lab126.cmd wirelessEnable 0
-					return
-				else
-					sleep 1
-				fi
+				sleep 1
 			done
 		else
 			msg "Too late to set wakeup (only ${TIME_LEFT}s left, need >${LATEST_WAKEUP_SET}s)"
