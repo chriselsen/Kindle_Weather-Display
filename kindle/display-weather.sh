@@ -46,10 +46,8 @@ wait_while_charging () {
 			calc_wakeup
 			if [ "$DOWNLOAD_IMG" = "YES" ]; then
 				msg "Charging: scheduled download triggered."
-				download_llb
+				download_llb keep_wifi
 				display_image $FN
-				# Keep WiFi on after download while still charging
-				lipc-set-prop com.lab126.cmd wirelessEnable 1
 				DOWNLOAD_IMG="NO"
 			fi
 			sleep 60
@@ -191,6 +189,10 @@ calc_wakeup () {
 }
 
 download_llb () {
+	# Pass "keep_wifi" as first argument to leave WiFi on after download
+	# (used when charging so SSH stays connected).
+	KEEP_WIFI="${1:-}"
+
 	# turn on WIFI
 	msg "turn WIFI ON: `powerd_test -s | grep Remaining | awk '{print $6}'` s in '`powerd_test -s | grep Power | awk '{print $3 $4}'`'"
 	lipc-set-prop com.lab126.cmd wirelessEnable 1
@@ -272,11 +274,14 @@ download_llb () {
 		set_retries
 	fi
 
-	# Stop WIFI
-	lipc-set-prop com.lab126.cmd wirelessEnable 0
+	# Stop WIFI — unless caller asked to keep it on (e.g. when charging)
+	if [ "$KEEP_WIFI" != "keep_wifi" ]; then
+		lipc-set-prop com.lab126.cmd wirelessEnable 0
+		msg "WIFI OFF: `powerd_test -s | grep Remaining | awk '{print $6}'` s in '`powerd_test -s | grep Power | awk '{print $3 $4}'`'"
+	else
+		msg "WIFI kept on (charging mode)"
+	fi
 	CONNECTED=0
-
-	msg "WIFI OFF: `powerd_test -s | grep Remaining | awk '{print $6}'` s in '`powerd_test -s | grep Power | awk '{print $3 $4}'`'"
 }
 
 set_retries () {
@@ -424,11 +429,9 @@ if is_charging; then
 	msg "Startup: external power detected — enabling WiFi."
 	lipc-set-prop com.lab126.cmd wirelessEnable 1
 	# Do an immediate download on startup while already in active state
-	download_llb
+	download_llb keep_wifi
 	display_image $FN
 	DOWNLOAD_IMG="NO"
-	# Re-enable WiFi after download_llb turned it off
-	lipc-set-prop com.lab126.cmd wirelessEnable 1
 	# Enter the charging loop — keeps WiFi up, services scheduled
 	# downloads every 60s, and exits when the charger is disconnected.
 	msg "Entering charging loop — WiFi stays on until unplugged."
@@ -436,9 +439,8 @@ if is_charging; then
 		calc_wakeup
 		if [ "$DOWNLOAD_IMG" = "YES" ]; then
 			msg "Charging: scheduled download triggered."
-			download_llb
+			download_llb keep_wifi
 			display_image $FN
-			lipc-set-prop com.lab126.cmd wirelessEnable 1
 			DOWNLOAD_IMG="NO"
 		fi
 		sleep 60
