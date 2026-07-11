@@ -423,24 +423,20 @@ DL_FAILED="NO"
 if is_charging; then
 	msg "Startup: external power detected — enabling WiFi."
 	lipc-set-prop com.lab126.cmd wirelessEnable 1
-	# Do an immediate download on startup
-	wait_for_ss
-	powerd_test -p
+	# Do an immediate download on startup while already in active state
 	download_llb
-	powerd_test -p
 	display_image $FN
 	DOWNLOAD_IMG="NO"
-	# Now enter the charging loop — keeps WiFi up, services scheduled
+	# Re-enable WiFi after download_llb turned it off
+	lipc-set-prop com.lab126.cmd wirelessEnable 1
+	# Enter the charging loop — keeps WiFi up, services scheduled
 	# downloads every 60s, and exits when the charger is disconnected.
 	msg "Entering charging loop — WiFi stays on until unplugged."
 	while is_charging; do
 		calc_wakeup
 		if [ "$DOWNLOAD_IMG" = "YES" ]; then
 			msg "Charging: scheduled download triggered."
-			wait_for_ss
-			powerd_test -p
 			download_llb
-			powerd_test -p
 			display_image $FN
 			lipc-set-prop com.lab126.cmd wirelessEnable 1
 			DOWNLOAD_IMG="NO"
