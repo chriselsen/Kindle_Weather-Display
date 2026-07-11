@@ -416,11 +416,9 @@ DL_FAILED="NO"
 # -------------------------------
 # START: THIRD BLOCK: INFINITE LOOP
 
-# Startup: check if externally powered before entering the main loop.
-# If charging: turn WiFi on, do an immediate download, then enter the
-# charging loop which keeps WiFi up and services scheduled downloads.
-# On unplug the charging loop exits and we fall into the normal flow.
-# If not charging: wait for screensaver as usual.
+# Startup: wait for powerd to fully initialize, then check if externally
+# powered before entering the main loop.
+sleep 10
 if is_charging; then
 	msg "Startup: external power detected — enabling WiFi."
 	lipc-set-prop com.lab126.cmd wirelessEnable 1
