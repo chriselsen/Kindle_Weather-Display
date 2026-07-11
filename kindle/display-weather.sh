@@ -424,36 +424,23 @@ DL_FAILED="NO"
 # -------------------------------
 # START: THIRD BLOCK: INFINITE LOOP
 
-# Startup: wait for powerd to fully initialize before checking charging state.
-# powerd may not be ready immediately after boot — poll until it responds.
-msg "Startup: waiting for powerd to initialize..."
-POWERD_READY=0
-for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-	RESULT=`lipc-get-prop com.lab126.powerd isCharging 2>/dev/null`
-	if [ "$RESULT" = "0" ] || [ "$RESULT" = "1" ]; then
-		POWERD_READY=1
-		break
-	fi
-	sleep 5
-done
-if [ $POWERD_READY -eq 0 ]; then
-	msg "Startup: powerd did not respond, proceeding anyway."
-fi
+# Startup: always do an immediate download with WiFi on regardless of
+# charging state (avoids the unreliable isCharging=0 at boot when battery
+# is full). After the download, check charging state to decide whether to
+# enter the charging loop or proceed to normal sleep.
 msg "Startup: forcing screensaver state."
 powerd_test -p
+msg "Startup: enabling WiFi for initial download."
+lipc-set-prop com.lab126.cmd wirelessEnable 1
+download_llb keep_wifi
+display_image $FN
+DOWNLOAD_IMG="NO"
+DEFER_STAY_AWAKE="NO"
 
-# Check charging state for WiFi management
+# Give powerd a moment after download activity, then check power state.
+sleep 5
 if is_charging; then
-	msg "Startup: external power detected — enabling WiFi."
-	lipc-set-prop com.lab126.cmd wirelessEnable 1
-	# Do an immediate download on startup
-	download_llb keep_wifi
-	display_image $FN
-	DOWNLOAD_IMG="NO"
-	DEFER_STAY_AWAKE="NO"
-	# Enter the charging loop — keeps WiFi up, services scheduled
-	# downloads every 60s, and exits when the charger is disconnected.
-	msg "Entering charging loop — WiFi stays on until unplugged."
+	msg "Startup: external power detected — entering charging loop."
 	while is_charging; do
 		calc_wakeup
 		if [ "$DOWNLOAD_IMG" = "YES" ]; then
@@ -467,8 +454,10 @@ if is_charging; then
 	done
 	msg "Charger disconnected — turning WiFi off, resuming normal sleep cycle."
 	lipc-set-prop com.lab126.cmd wirelessEnable 0
+else
+	msg "Startup: not on external power — turning WiFi off."
+	lipc-set-prop com.lab126.cmd wirelessEnable 0
 fi
-# Whether charging or not, fall through to the normal main loop
 
 # Never-ending main loop
 while [ 1 -eq 1 ]; do
