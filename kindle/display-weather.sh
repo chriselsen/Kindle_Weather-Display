@@ -303,6 +303,7 @@ write_wakeup () {
 	if [ "$DEFER_STAY_AWAKE" = "NO" ]; then
 		# Make sure we have enough time left in readyToSuspend to set the wakeup
 		if [ $TIME_LEFT -gt $LATEST_WAKEUP_SET ]; then
+			WAKEUP_ATTEMPTS=0
 			while [ "`lipc-get-prop com.lab126.powerd state`" = "readyToSuspend" ]; do
 				lipc-set-prop -i com.lab126.powerd rtcWakeup $WAKEUP_S
 				SUCCESS_SET_WAKEUP=$?
@@ -311,7 +312,14 @@ write_wakeup () {
 				else
 					msg "Could not set wakeup to '$WAKEUP_S'. Error '$SUCCESS_SET_WAKEUP'"
 				fi
-				sleep 1
+				WAKEUP_ATTEMPTS=`expr $WAKEUP_ATTEMPTS + 1`
+				if [ $WAKEUP_ATTEMPTS -ge 3 ]; then
+					msg "rtcWakeup set $WAKEUP_ATTEMPTS times, device not suspending (USB connected?). Waiting."
+					sleep 30
+					WAKEUP_ATTEMPTS=0
+				else
+					sleep 1
+				fi
 			done
 		else
 			msg "Too late to set wakeup (only ${TIME_LEFT}s left, need >${LATEST_WAKEUP_SET}s)"
