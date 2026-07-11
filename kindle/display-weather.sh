@@ -463,6 +463,26 @@ fi
 # Never-ending main loop
 while [ 1 -eq 1 ]; do
 
+	# If USB/power is connected, re-enter the charging loop to keep
+	# WiFi up for SSH access and service scheduled downloads.
+	if is_charging; then
+		msg "Power connected — entering charging loop."
+		lipc-set-prop com.lab126.cmd wirelessEnable 1
+		while is_charging; do
+			calc_wakeup
+			if [ "$DOWNLOAD_IMG" = "YES" ]; then
+				msg "Charging: scheduled download triggered."
+				download_llb keep_wifi
+				display_image $FN
+				DOWNLOAD_IMG="NO"
+				DEFER_STAY_AWAKE="NO"
+			fi
+			sleep 60
+		done
+		msg "Charger disconnected — turning WiFi off, resuming normal sleep cycle."
+		lipc-set-prop com.lab126.cmd wirelessEnable 0
+	fi
+
 	if [ "$DOWNLOAD_IMG" = "YES" ]; then
 		# Download is performed in 'active' mode.
 		# First enter screensaver so we can safely simulate a power button
