@@ -364,8 +364,8 @@ DL_RETRIES=3
 # Minimum sleep time in seconds
 WAKEUP_MINIMAL=60
 # Do not attempt to set rtcWakeup if fewer than this many seconds remain
-# in the readyToSuspend window (0 = always try, 5 is a safer value)
-LATEST_WAKEUP_SET=5
+# in the readyToSuspend window (0 = always try)
+LATEST_WAKEUP_SET=0
 
 # WIFI
 NETWORK_TIMEOUT=60
