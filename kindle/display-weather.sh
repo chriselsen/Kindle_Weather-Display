@@ -424,11 +424,21 @@ DL_FAILED="NO"
 # -------------------------------
 # START: THIRD BLOCK: INFINITE LOOP
 
-# Startup: give powerd time to initialize, then force screensaver state
-# (device boots into Active; without framework the screensaver never fires
-# naturally, so we simulate a power button press to enter it).
-# Then do an immediate download and enter the normal loop.
-sleep 10
+# Startup: wait for powerd to fully initialize before checking charging state.
+# powerd may not be ready immediately after boot — poll until it responds.
+msg "Startup: waiting for powerd to initialize..."
+POWERD_READY=0
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+	RESULT=`lipc-get-prop com.lab126.powerd isCharging 2>/dev/null`
+	if [ "$RESULT" = "0" ] || [ "$RESULT" = "1" ]; then
+		POWERD_READY=1
+		break
+	fi
+	sleep 5
+done
+if [ $POWERD_READY -eq 0 ]; then
+	msg "Startup: powerd did not respond, proceeding anyway."
+fi
 msg "Startup: forcing screensaver state."
 powerd_test -p
 
