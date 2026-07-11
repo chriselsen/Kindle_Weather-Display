@@ -415,8 +415,45 @@ DL_FAILED="NO"
 # -------------------------------
 # START: THIRD BLOCK: INFINITE LOOP
 
-# Initial wait: user presses power button to enter screensaver and start loop
-wait_for_ss
+# Startup: check if externally powered before entering the main loop.
+# If charging: turn WiFi on, do an immediate download, then enter the
+# charging loop which keeps WiFi up and services scheduled downloads.
+# On unplug the charging loop exits and we fall into the normal flow.
+# If not charging: wait for screensaver as usual.
+if is_charging; then
+	msg "Startup: external power detected — enabling WiFi."
+	lipc-set-prop com.lab126.cmd wirelessEnable 1
+	# Do an immediate download on startup
+	wait_for_ss
+	powerd_test -p
+	download_llb
+	powerd_test -p
+	display_image $FN
+	DOWNLOAD_IMG="NO"
+	# Now enter the charging loop — keeps WiFi up, services scheduled
+	# downloads every 60s, and exits when the charger is disconnected.
+	msg "Entering charging loop — WiFi stays on until unplugged."
+	while is_charging; do
+		calc_wakeup
+		if [ "$DOWNLOAD_IMG" = "YES" ]; then
+			msg "Charging: scheduled download triggered."
+			wait_for_ss
+			powerd_test -p
+			download_llb
+			powerd_test -p
+			display_image $FN
+			lipc-set-prop com.lab126.cmd wirelessEnable 1
+			DOWNLOAD_IMG="NO"
+		fi
+		sleep 60
+	done
+	msg "Charger disconnected — turning WiFi off, resuming normal sleep cycle."
+	lipc-set-prop com.lab126.cmd wirelessEnable 0
+else
+	# Not charging — wait for the user to press the power button
+	# (entering screensaver) before starting the main loop.
+	wait_for_ss
+fi
 
 # Never-ending main loop
 while [ 1 -eq 1 ]; do
