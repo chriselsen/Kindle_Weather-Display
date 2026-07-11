@@ -8,7 +8,8 @@ Install the content of the "server" folder on a server and the content of the "k
 1. Fill me out
 
 ### Kindle Setup
-1. Fill me out
+
+See [kindle/README.md](kindle/README.md) for full installation instructions, file placement, and configuration.
 
 ### Lambda Setup
 
