@@ -362,7 +362,7 @@ display_image () {
 # START: SECOND BLOCK: VARIABLES
 
 # Define ACTIONs (hh:mm, space-separated)
-ACTION_TIME="01:01 13:01"
+ACTION_TIME="01:02 13:02"
 
 # Debug
 DEBUG="NO"
