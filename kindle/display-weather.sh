@@ -93,25 +93,16 @@ wait_for_ready () {
 		wait_while_charging
 
 		# Extra check: even if isCharging=0 (battery full), USB may still
-		# be connected and preventing suspend. Test by checking if we are
-		# still in readyToSuspend after a brief pause — if so, treat as
-		# externally powered: enable WiFi and wait WITHOUT arming rtcWakeup
-		# (arming it would cause the device to suspend when the timer fires).
+		# be connected and preventing immediate suspend. Enable WiFi for
+		# SSH access, then arm rtcWakeup normally so scheduled downloads
+		# still fire. The device will suspend when the timer fires even
+		# with USB connected, and will re-enter the charging loop on wake.
 		sleep 2
 		if [ "`lipc-get-prop com.lab126.powerd state`" = "readyToSuspend" ]; then
 			sleep 3
 			if [ "`lipc-get-prop com.lab126.powerd state`" = "readyToSuspend" ]; then
-				msg "Device still in readyToSuspend — USB likely connected. Enabling WiFi, not arming rtcWakeup."
+				msg "Device still in readyToSuspend — USB likely connected. Enabling WiFi."
 				lipc-set-prop com.lab126.cmd wirelessEnable 1
-				# Wait without setting rtcWakeup — device will stay awake
-				# until USB is unplugged and powerd transitions out of readyToSuspend.
-				while [ "`lipc-get-prop com.lab126.powerd state`" = "readyToSuspend" ]; do
-					sleep 10
-				done
-				lipc-set-prop com.lab126.cmd wirelessEnable 0
-				msg "Device left readyToSuspend — resuming normal cycle."
-				AWAKE_AGAIN="NO"
-				return
 			fi
 		fi
 
